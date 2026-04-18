@@ -1,177 +1,212 @@
-# 🤖 Seguidor de Línea + Evasión de Obstáculos
-**Arduino Nano · L298N · HC-SR04 · 2× TCRT5000**
+// ============================================================
+//  Seguidor de línea + Evasión programada
+//  Arduino Nano + L298N + HC-SR04 + 2x TCRT5000
+// ============================================================
 
-Robot de dos ruedas que sigue una línea negra sobre superficie blanca y evade obstáculos de forma autónoma mediante una maniobra temporizada, reincorporándose a la línea automáticamente.
+// ── Pines ultrasónico ────────────────────────────────────────
+#define TRIG_PIN 2
+#define ECHO_PIN 3
 
----
+// ── Pines L298N ──────────────────────────────────────────────
+#define ENA 5
+#define IN1 7
+#define IN2 8
+#define IN3 9
+#define IN4 10
+#define ENB 6
 
-## 📋 Tabla de Contenido
+// ── Pines sensores ───────────────────────────────────────────
+#define SENSOR_IZQ 11
+#define SENSOR_DER 12
 
-- [Características](#características)
-- [Hardware](#hardware)
-- [Conexiones](#conexiones)
-- [Configuración](#configuración)
-- [Funcionamiento](#funcionamiento)
-- [Secuencia de Evasión](#secuencia-de-evasión)
-- [Puesta en Marcha](#puesta-en-marcha)
-- [Monitor Serial](#monitor-serial)
-- [Limitaciones Conocidas](#limitaciones-conocidas)
+// ── Parámetros ───────────────────────────────────────────────
+int velocidad = 190; // 70 para 12v
+int distancia_limite = 20;
 
----
+bool modoEvasion = false;
 
-## Características
+// ============================================================
 
-- ✅ Seguimiento de línea en tiempo real con dos sensores IR (TCRT5000)
-- ✅ Detección de obstáculos con sensor ultrasónico (HC-SR04)
-- ✅ Maniobra de evasión totalmente autónoma
-- ✅ Reincorporación automática a la línea tras la evasión
-- ✅ Salida de depuración por Serial a 9600 baudios
+void setup() {
 
----
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENB, OUTPUT);
 
-## Hardware
+  pinMode(SENSOR_IZQ, INPUT);
+  pinMode(SENSOR_DER, INPUT);
 
-| Componente           | Cant. | Notas                               |
-|----------------------|-------|-------------------------------------|
-| Arduino Nano         | 1     | Cualquier Nano AVR de 5 V           |
-| Driver L298N         | 1     | Puente H doble                      |
-| Motores DC con caja  | 2     | Uno por lado                        |
-| HC-SR04              | 1     | Sensor ultrasónico de distancia     |
-| TCRT5000             | 2     | Sensores IR reflectivos de línea    |
-| Fuente de poder      | 1     | 7–12 V para motores · 5 V para Nano |
-| Chasis + ruedas      | 1     | Tracción diferencial de dos ruedas  |
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
 
----
+  Serial.begin(9600);
+}
 
-## Conexiones
+// ============================================================
 
-### Ultrasónico — HC-SR04
+void loop() {
 
-| HC-SR04 | Arduino Nano |
-|---------|--------------|
-| VCC     | 5 V          |
-| GND     | GND          |
-| TRIG    | D2           |
-| ECHO    | D3           |
+  int distancia = medirDistancia();
 
-### Driver de motores — L298N
+  if (distancia <= distancia_limite && !modoEvasion) {
+    modoEvasion = true;
+    evadirObstaculo();
+  }
 
-| L298N | Arduino Nano |
-|-------|--------------|
-| ENA   | D5 (PWM)     |
-| IN1   | D7           |
-| IN2   | D8           |
-| IN3   | D9           |
-| IN4   | D10          |
-| ENB   | D6 (PWM)     |
-| GND   | GND          |
+  if (!modoEvasion) {
+    seguirLinea();
+  }
+}
 
-> ⚠️ Conectar la fuente de los motores (7–12 V) al pin **VS** del L298N,
-> **nunca** al VIN del Arduino.
+// ============================================================
+// MEDIR DISTANCIA
+// ============================================================
 
-### Sensores IR — TCRT5000
+int medirDistancia() {
 
-| Sensor        | Arduino Nano |
-|---------------|--------------|
-| Salida Izq.   | D11          |
-| Salida Der.   | D12          |
-| VCC           | 5 V          |
-| GND           | GND          |
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
 
-> Los sensores entregan `LOW` sobre línea negra y `HIGH` sobre blanco.
-> Ajustar el potenciómetro de cada módulo hasta que el LED indicador
-> conmute limpiamente al cruzar el borde de la línea.
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
 
----
+  long duracion = pulseIn(ECHO_PIN, HIGH, 30000);
 
-## Configuración
+  if (duracion == 0) return 999;
 
-Todos los parámetros ajustables están definidos como constantes `constexpr`
-al inicio del sketch, sin números mágicos dispersos en el código.
+  int distancia = duracion * 0.034 / 2;
 
-```cpp
+  if (distancia <= 0 || distancia > 400) return 999;
 
-  constexpr uint8_t VELOCIDAD        = 190;  // PWM 0–255. Usar ~70 con fuente de 12 V.
-  constexpr uint8_t DISTANCIA_LIMITE = 20;   // Umbral de detección en cm.
+  return distancia;
+}
 
-  | Constante          | Valor por defecto | Descripción                                |
-  |--------------------|-------------------|--------------------------------------------|
-  | `VELOCIDAD`        | `190`             | Ciclo de trabajo PWM para ambos motores    |
-  | `DISTANCIA_LIMITE` | `20`              | Distancia (cm) que dispara la evasión      |
-  | `DISTANCIA_MAXIMA` | `999`             | Centinela cuando no se recibe eco          |
+// ============================================================
+// SEGUIR LINEA NORMAL
+// ============================================================
 
----
+void seguirLinea() {
 
-## Funcionamiento
+  int izq = digitalRead(SENSOR_IZQ);
+  int der = digitalRead(SENSOR_DER);
 
-  loop()
-  ├─ medirDistancia()              ← pulsa el HC-SR04, retorna cm
-  │
-  ├─ distancia ≤ DISTANCIA_LIMITE  Y  !modoEvasion
-  │    └─ evadirObstaculo()        ← secuencia temporizada bloqueante
-  │
-  └─ !modoEvasion
-  └─ seguirLinea()            ← lee sensores IR y corrige dirección
+  if (izq == LOW && der == LOW) {
+    avanzar();
+  }
+  else if (izq == LOW && der == HIGH) {
+    girarIzquierda();
+  }
+  else if (izq == HIGH && der == LOW) {
+    girarDerecha();
+  }
+  else {
+    detener();
+  }
+}
 
-  ### Lógica de seguimiento
+// ============================================================
+// EVASION PROGRAMADA
+// ============================================================
 
-  | Sensor Izq. | Sensor Der. | Acción                           |
-  |-------------|-------------|----------------------------------|
-  | `LOW`       | `LOW`       | Avanzar — centrado en la línea   |
-  | `LOW`       | `HIGH`      | Girar izquierda — deriva derecha |
-  | `HIGH`      | `LOW`       | Girar derecha — deriva izquierda |
-  | `HIGH`      | `HIGH`      | Detener — línea perdida          |
+void evadirObstaculo() {
+
+  Serial.println("OBSTACULO DETECTADO");
+
+  detener();
+  delay(150);
+
+  girarDerecha();
+  delay(1200);
+
+  detener();
+  delay(150);
+
+  avanzar();
+  delay(700);
   
-  ---
-  
-  ## Secuencia de Evasión
-  
-  Al detectar un obstáculo a menos de `DISTANCIA_LIMITE` cm, el robot
-  ejecuta la siguiente maniobra de lazo abierto:
+  detener();
+  delay(150);
 
-  Detener        — pausa breve antes de maniobrar
-  Girar der.     — 400 ms, esquiva el obstáculo lateralmente
-  Detener        — estabilizar
-  Avanzar        — 1000 ms, supera el largo del obstáculo
-  Detener        — estabilizar
-  Girar izq.     — 400 ms, reorienta hacia la línea
-  Detener        — estabilizar
-  Avanzar        — 1000 ms, se acerca a la línea
-  Detener        — estabilizar
-  Girar izq.     — barrido hasta que un sensor IR detecte la línea
-  Girar der.     — 200 ms de corrección para centrarse en la línea
-  Reanudar seguimiento normal
+  girarIzquierda();
+  delay(1200);
 
-  > 💡 Si el robot constantemente se pasa o se queda corto al reincorporarse,
-  > ajustar los valores de `delay()` en los pasos 2, 4, 6 y 8 según la
-  > geometría del chasis y la velocidad de los motores.
-  
-  ---
-  
-  ## Puesta en Marcha
-  
-  1. Clonar o descargar este repositorio.
-  2. Abrir `line_follower.ino` en **Arduino IDE ≥ 1.8** o **Arduino IDE 2**.
-  3. Seleccionar **Placa → Arduino Nano** y el **Puerto** correspondiente.
-  4. Ajustar `VELOCIDAD` y `DISTANCIA_LIMITE` según el hardware.
-  5. Cargar el sketch.
-  6. Abrir el Monitor Serial a **9600 baudios**.
-  7. Colocar el robot sobre la línea y energizar los motores.
-  
-  ---
-  
-  ## Monitor Serial
-  
-  | Mensaje               | Significado                                         |
-  |-----------------------|-----------------------------------------------------|
-  | `OBSTACULO DETECTADO` | Obstáculo dentro del umbral — iniciando evasión     |
-  | `LINEA REENCONTRADA`  | Sensor IR detectó la línea — reanudando seguimiento |
-  
-  ---
-  
-  ## Limitaciones Conocidas
-  
-  - **Evasión de lazo abierto** — los retardos son fijos; el resultado varía con el voltaje de la batería y la fricción de la superficie. A menor voltaje, los giros serán más cortos de lo esperado.
-  - **Obstáculo único** — el robot no maneja obstáculos detectados *durante* la maniobra de evasión.
-  - **`pulseIn` bloqueante** — la medición de distancia detiene la ejecución hasta 30 ms por llamada. Para mayor respuesta, considerar `NewPing` o interrupciones por temporizador.
-  - **Sin PID** — el seguimiento usa control todo-o-nada (bang-bang). Para trayectorias más suaves a mayor velocidad, se recomienda un controlador PID.
+  detener();
+  delay(150);
+
+  avanzar();
+  delay(1000);
+
+  detener();
+  delay(150);
+
+  girarIzquierda();
+  delay(1200);
+
+  avanzar();
+
+  while (true) {
+
+    int izq = digitalRead(SENSOR_IZQ);
+    int der = digitalRead(SENSOR_DER);
+
+    if (izq == LOW || der == LOW) {
+      break;   // Línea encontrada
+    }
+
+    girarIzquierda();
+  }
+
+  girarDerecha();
+  delay(200);
+
+  modoEvasion = false;
+
+  Serial.println("LINEA REENCONTRADA");
+}
+
+// ============================================================
+// MOVIMIENTOS
+// ============================================================
+
+void avanzar() {
+
+  analogWrite(ENA, velocidad);
+  analogWrite(ENB, velocidad);
+
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+}
+
+void girarIzquierda() {
+
+  analogWrite(ENA, velocidad);
+  analogWrite(ENB, velocidad);
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+}
+
+void girarDerecha() {
+
+  analogWrite(ENA, velocidad);
+  analogWrite(ENB, velocidad);
+
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+}
+
+void detener() {
+
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+}
