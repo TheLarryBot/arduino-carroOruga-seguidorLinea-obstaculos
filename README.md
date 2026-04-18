@@ -188,3 +188,6 @@ ejecuta la siguiente maniobra de lazo abierto (Estos valores son modificables):
   Para trayectorias más suaves a mayor velocidad, se recomienda un
   controlador PID.
 ```
+
+
+
